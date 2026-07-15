@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -45,7 +47,10 @@ class CliExecutor:
         approval_state_path: Path | None = None,
         stage: str | None = None,
     ) -> str:
-        command = self.build_command() if self.interactive_approvals else list(self.command)
+        agent_command = (
+            self.build_command() if self.interactive_approvals else list(self.command)
+        )
+        command = self.prepare_command(agent_command)
         environment = os.environ.copy()
         if self.interactive_approvals:
             environment.update(
@@ -90,6 +95,61 @@ class CliExecutor:
 
     def build_command(self) -> list[str]:
         return list(self.command)
+
+    @staticmethod
+    def prepare_command(command: Sequence[str]) -> list[str]:
+        """Resolve executables and make Windows npm .cmd shims runnable.
+
+        PowerShell applies PATHEXT and can launch npm-generated .cmd files, but
+        Windows CreateProcess (used by subprocess with shell=False) cannot run a
+        batch file directly. npm shims are unwrapped to their native executable
+        or Node.js entry point so JSON/TOML arguments keep their exact quoting.
+        Unknown batch files fall back to cmd.exe.
+        """
+        prepared = [str(part) for part in command]
+        if not prepared:
+            return prepared
+        resolved = shutil.which(prepared[0])
+        if resolved:
+            prepared[0] = resolved
+        elif Path(prepared[0]).is_file():
+            prepared[0] = str(Path(prepared[0]).resolve())
+
+        suffix = Path(prepared[0]).suffix.lower()
+        if os.name == "nt" and suffix in {".cmd", ".bat"}:
+            npm_target = CliExecutor._unwrap_npm_shim(Path(prepared[0]))
+            if npm_target:
+                return npm_target + prepared[1:]
+            comspec = os.environ.get("COMSPEC", "cmd.exe")
+            return [
+                comspec,
+                "/d",
+                "/s",
+                "/c",
+                subprocess.list2cmdline(prepared),
+            ]
+        return prepared
+
+    @staticmethod
+    def _unwrap_npm_shim(shim: Path) -> list[str] | None:
+        """Return the executable behind a standard npm Windows shim."""
+        try:
+            content = shim.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        matches = re.findall(
+            r'"%dp0%[\\/]([^"\r\n]+\.(?:exe|js))"', content, re.IGNORECASE
+        )
+        if not matches:
+            return None
+        target = (shim.parent / matches[-1].replace("\\", os.sep)).resolve()
+        if not target.is_file():
+            return None
+        if target.suffix.lower() == ".exe":
+            return [str(target)]
+        local_node = shim.parent / "node.exe"
+        node = str(local_node) if local_node.is_file() else (shutil.which("node") or "node")
+        return [node, str(target)]
 
     def approval_hook_command(self) -> str:
         executable = str(Path(sys.executable).resolve())

@@ -19,7 +19,7 @@ from .runtime.state import TaskState
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codeforge")
-    parser.add_argument("--version", action="version", version="CodeForge 0.1.1")
+    parser.add_argument("--version", action="version", version="CodeForge 0.1.2")
     subparsers = parser.add_subparsers(dest="command", required=True)
     run = subparsers.add_parser("run", help="run a task through the workflow")
     run.add_argument("task", type=Path, help="path to the task Markdown file")
