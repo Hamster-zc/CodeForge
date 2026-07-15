@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -10,9 +12,11 @@ MAX_DIFF_CHARS = 80_000
 
 
 class ContextBuilder:
-    def __init__(self, repo: Path, roles_dir: Path):
+    def __init__(self, repo: Path, roles_dir: Path,
+                 git_tree_before: str | None = None):
         self.repo = repo.resolve()
         self.roles_dir = roles_dir
+        self.git_tree_before = git_tree_before
 
     def architect(self, task: str) -> str:
         return self._compose(
@@ -61,6 +65,26 @@ class ContextBuilder:
         )
 
     def git_diff(self) -> str:
+        if self.git_tree_before:
+            current_tree = capture_git_tree(self.repo)
+            if current_tree:
+                result = subprocess.run(
+                    [
+                        "git", "diff", "--no-ext-diff", self.git_tree_before,
+                        current_tree, "--", ".",
+                    ],
+                    cwd=self.repo,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    capture_output=True,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    return result.stdout[-MAX_DIFF_CHARS:] or "(no task changes)"
+
+        # Compatibility fallback for repositories where a tree snapshot cannot
+        # be created (for example an unborn or non-Git repository).
         result = subprocess.run(
             ["git", "diff", "HEAD", "--no-ext-diff", "--", "."],
             cwd=self.repo,
@@ -165,3 +189,57 @@ def extract_result(output: str) -> tuple[str, dict]:
         raise ValueError("Agent result JSON must be an object")
     markdown = (output[:start] + output[end + len(end_tag):]).strip()
     return markdown, result
+
+
+def markdown_from_result(name: str, result: dict) -> str:
+    """Create a deterministic human artifact when an agent only returns JSON."""
+    title = name.replace("-", " ").replace("_", " ").title()
+    lines = [f"# {title}"]
+    summary = result.get("summary")
+    if summary:
+        lines.extend(["", str(summary)])
+    for key, value in result.items():
+        if key == "summary":
+            continue
+        heading = key.replace("_", " ").title()
+        lines.extend(["", f"## {heading}", ""])
+        if isinstance(value, list):
+            if not value:
+                lines.append("- None")
+            else:
+                for item in value:
+                    if isinstance(item, dict):
+                        parts = [
+                            f"**{field.replace('_', ' ').title()}**: {content}"
+                            for field, content in item.items()
+                        ]
+                        lines.append("- " + "; ".join(parts))
+                    else:
+                        lines.append(f"- {item}")
+        elif isinstance(value, dict):
+            lines.extend(["```json", json.dumps(value, ensure_ascii=False, indent=2), "```"])
+        else:
+            lines.append(str(value))
+    return "\n".join(lines).strip()
+
+
+def capture_git_tree(repo: Path) -> str | None:
+    """Snapshot the current worktree with an isolated temporary Git index."""
+    with tempfile.TemporaryDirectory(prefix="codeforge-git-index-") as tmp:
+        index_path = Path(tmp) / "index"
+        environment = os.environ.copy()
+        environment["GIT_INDEX_FILE"] = str(index_path)
+        for command in (["git", "read-tree", "HEAD"], ["git", "add", "-A", "--", "."]):
+            completed = subprocess.run(
+                command, cwd=repo, env=environment, text=True,
+                encoding="utf-8", errors="replace", capture_output=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                return None
+        completed = subprocess.run(
+            ["git", "write-tree"], cwd=repo, env=environment, text=True,
+            encoding="utf-8", errors="replace", capture_output=True,
+            check=False,
+        )
+        return completed.stdout.strip() if completed.returncode == 0 else None

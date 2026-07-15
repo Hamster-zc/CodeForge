@@ -16,6 +16,7 @@ class TaskState:
     approved: bool | None = None
     git_commit_before: str | None = None
     git_commit_after: str | None = None
+    git_tree_before: str | None = None
     executors: dict[str, str] = field(default_factory=dict)
     pending_approval: dict[str, Any] | None = None
     approval_history: list[dict[str, Any]] = field(default_factory=list)

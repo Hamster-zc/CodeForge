@@ -12,14 +12,19 @@ from pathlib import Path
 from .executors import ClaudeCodeExecutor, CodexExecutor
 from .executors.base import CliExecutor, ExecutorError
 from .runtime.config import load_config
-from .runtime.context import ContextBuilder, extract_result
+from .runtime.context import (
+    ContextBuilder,
+    capture_git_tree,
+    extract_result,
+    markdown_from_result,
+)
 from .runtime.router import Router
 from .runtime.state import TaskState
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codeforge")
-    parser.add_argument("--version", action="version", version="CodeForge 0.1.2")
+    parser.add_argument("--version", action="version", version="CodeForge 0.1.3")
     subparsers = parser.add_subparsers(dest="command", required=True)
     run = subparsers.add_parser("run", help="run a task through the workflow")
     run.add_argument("task", type=Path, help="path to the task Markdown file")
@@ -54,17 +59,22 @@ def run_task(task_path: Path, repo: Path | None = None) -> int:
     if not task_text.strip():
         raise ValueError("Task file is empty")
 
+    git_tree_before = capture_git_tree(repo)
     task_id = _task_id(task_path)
     workspace = repo / "tasks" / task_id
     artifacts = workspace / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=False)
     shutil.copyfile(task_path, workspace / "task.md")
     state_path = workspace / "state.json"
-    state = TaskState(task_id=task_id, git_commit_before=_git_head(repo))
+    state = TaskState(
+        task_id=task_id,
+        git_commit_before=_git_head(repo),
+        git_tree_before=git_tree_before,
+    )
     state.save(state_path)
 
     executors = _build_executors(config)
-    context = ContextBuilder(repo, forge_dir / "roles")
+    context = ContextBuilder(repo, forge_dir / "roles", git_tree_before)
     router = Router(policies)
     max_iterations = max(1, int(workflow.get("max_iterations", 2)))
 
@@ -77,7 +87,10 @@ def run_task(task_path: Path, repo: Path | None = None) -> int:
         _require_fields(
             architecture,
             "architecture",
-            {"summary", "risk", "relevant_files", "acceptance_criteria"},
+            {
+                "summary", "risk", "risk_factors", "planned_files",
+                "relevant_files", "acceptance_criteria",
+            },
         )
         state.executors["architect"] = "codex"
         state.save(state_path)
@@ -184,6 +197,8 @@ def _invoke_artifact(executor: CliExecutor, prompt: str, repo: Path,
         prompt, repo, approval_state_path=state_path, stage=stage
     )
     markdown, result = extract_result(output)
+    if not markdown.strip():
+        markdown = markdown_from_result(name, result)
     (artifacts / f"{name}.md").write_text(markdown + "\n", encoding="utf-8")
     (artifacts / f"{name}.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

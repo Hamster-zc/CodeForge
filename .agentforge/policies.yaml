@@ -5,17 +5,30 @@
     "default": "codex"
   },
   "high_risk_keywords": [
-    "architecture",
-    "database",
+    "architecture change",
+    "database schema",
     "migration",
     "authentication",
     "authorization",
     "security",
     "core module",
-    "架构",
-    "数据库",
-    "鉴权",
+    "架构变更",
+    "数据库结构",
+    "数据迁移",
+    "身份认证",
+    "权限控制",
+    "安全敏感",
     "核心模块"
-  ]
+  ],
+  "recognized_high_risk_factors": [
+    "architecture_change",
+    "database_change",
+    "security_sensitive",
+    "core_module",
+    "cross_module",
+    "destructive",
+    "dependency_change",
+    "public_api_change"
+  ],
+  "low_risk_max_files": 8
 }
-
