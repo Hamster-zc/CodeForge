@@ -1,0 +1,77 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from CodeForge.runtime.config import load_config
+from CodeForge.runtime.context import ContextBuilder, extract_result
+from CodeForge.runtime.router import Router
+from CodeForge.runtime.state import TaskState
+
+
+class RuntimeTests(unittest.TestCase):
+    def test_extract_result_separates_markdown_and_json(self):
+        markdown, result = extract_result(
+            "Human report\n<CODEFORGE_RESULT>\n"
+            '{"verdict":"passed"}\n</CODEFORGE_RESULT>'
+        )
+        self.assertEqual(markdown, "Human report")
+        self.assertEqual(result, {"verdict": "passed"})
+
+    def test_extract_result_rejects_missing_block(self):
+        with self.assertRaisesRegex(ValueError, "missing"):
+            extract_result("plain output")
+
+    def test_router_uses_declared_risk_and_safe_default(self):
+        router = Router(
+            {
+                "implementation": {
+                    "low_risk": "claude_code",
+                    "high_risk": "codex",
+                    "default": "codex",
+                },
+                "high_risk_keywords": ["database"],
+            }
+        )
+        self.assertEqual(
+            router.implementation_executor("edit copy", {"risk": "low"}),
+            "claude_code",
+        )
+        self.assertEqual(
+            router.implementation_executor("change database", {}), "codex"
+        )
+        self.assertEqual(router.implementation_executor("ambiguous", {}), "codex")
+        self.assertEqual(
+            router.fix_executor({"risk": "high"}, "claude_code"), "codex"
+        )
+
+    def test_state_is_durable_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            state = TaskState("task-1")
+            state.transition(path, "review", status="running", iteration=1)
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["stage"], "review")
+            self.assertEqual(saved["iteration"], 1)
+            self.assertIn("git_commit_before", saved)
+
+    def test_config_is_json_compatible_yaml(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.yaml"
+            path.write_text('{"max_iterations": 2}', encoding="utf-8")
+            self.assertEqual(load_config(path)["max_iterations"], 2)
+
+    def test_relevant_file_cannot_escape_repository(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            roles = repo / "roles"
+            roles.mkdir()
+            (roles / "implementer.md").write_text("role", encoding="utf-8")
+            prompt = ContextBuilder(repo, roles).implementer(
+                "task", "plan", {"relevant_files": ["../secret.txt"]}
+            )
+            self.assertIn("skipped: outside repository", prompt)
+
+
+if __name__ == "__main__":
+    unittest.main()

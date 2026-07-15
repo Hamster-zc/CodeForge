@@ -1,0 +1,11 @@
+{
+  "stages": [
+    "architect",
+    "human_approval",
+    "implementation",
+    "review",
+    "verification"
+  ],
+  "max_iterations": 2
+}
+

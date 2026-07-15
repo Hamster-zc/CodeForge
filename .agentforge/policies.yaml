@@ -1,0 +1,21 @@
+{
+  "implementation": {
+    "low_risk": "claude_code",
+    "high_risk": "codex",
+    "default": "codex"
+  },
+  "high_risk_keywords": [
+    "architecture",
+    "database",
+    "migration",
+    "authentication",
+    "authorization",
+    "security",
+    "core module",
+    "架构",
+    "数据库",
+    "鉴权",
+    "核心模块"
+  ]
+}
+
